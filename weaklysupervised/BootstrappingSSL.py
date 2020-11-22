@@ -5,7 +5,7 @@ Created on Sun Dec 22 19:22:43 2020
 @author: rosefun
 """
 import keras.backend as K
-from keras.callbacks import Callback
+from keras.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from keras.metrics import categorical_accuracy
 from keras.layers.core import Dense, Activation, Dropout
 import keras
@@ -27,16 +27,11 @@ warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 class BootstrappingCallback(Callback):
-	def __init__(self, batch_size=128, update_epoch_loss=False, pretrain=True):
-		super(PseudoCallback,self).__init__()   
+	def __init__(self, batch_size=128, bootstrapping_type="hard", beta=None):
+		super(BootstrappingCallback,self).__init__()
 		self.batch_size = batch_size
-
-		# unlabeled权重
-		self.alpha_t = 0.0
-		self.beta_t = 0.0
-		self.best_test_acc = 0.0
-		self.update_epoch_loss = update_epoch_loss
-		self.pretrain = pretrain
+		self.beta = beta
+		self.bootstrapping_type = bootstrapping_type
 
 	def train_generator(self, X, y):
 		while True:
@@ -73,60 +68,43 @@ class BootstrappingCallback(Callback):
 		return loss
 
 	def make_loss(self):
-
-		def loss_function(y_true, y_pred):
+		def bootstrapping_soft(y_true, y_pred, beta=0.95):
 			"""
-			: y_true, 2-dim tensor, true label, the last columns is a flag whether the sample is the pseudo-labeled sample.
+			: y_true, 2-dim tensor, true label.
 			: y_pred, 2-dim tensor.
 			"""
-			if self.pretrain:
-				y_true_item = y_true
-			else:
-				y_true_item = y_true[:, :-1]
-			unlabeled_flag = K.reshape(y_true[:, -1], [-1])
-			# the number of labeled samples and pseudo-labeled samples.
+			if self.beta is not None:
+				beta = self.beta
+			y_pred /= K.sum(y_pred, axis=-1, keepdims=True)
+			y_pred = K.clip(y_pred, K.epsilon(), 1.0 - K.epsilon())
+			soft_loss = -K.sum((beta * y_true + (1. - beta) * y_pred) *
+						  K.log(y_pred), axis=-1)
+			return soft_loss
 
-			labelIndex = K.tf.where(K.tf.equal(unlabeled_flag, 0.0))
-			labelIndex = K.reshape(labelIndex, [-1])
-
-			unlabelIndex = K.tf.where(K.tf.equal(unlabeled_flag, 1.0))
-			unlabelIndex = K.reshape(unlabelIndex, [-1])
-
-			labelY = K.gather(y_true_item, labelIndex)
-			labelPredictY = K.gather(y_pred, labelIndex)
-			unlabelY = K.gather(y_true_item, unlabelIndex)
-			unlabelPredictY = K.gather(y_pred, unlabelIndex)
-
-			loss = K.constant(0.0, dtype='float32')
-			# alpha*CE(unlabelX, hard_label)
-			loss += self.alpha_t * K.tf.cond(K.tf.equal(K.tf.size(unlabelY), 0), lambda: K.tf.constant(0.0),
-											 lambda: K.tf.reduce_mean(self.crossentropy(unlabelY, unlabelPredictY)))
-			# CE(labeledX, labelY)
-			loss += K.tf.cond(K.tf.equal(K.tf.size(labelY), 0), lambda: K.tf.constant(0.0),
-							  lambda: K.tf.reduce_mean(self.crossentropy(labelY, labelPredictY)))
-			return loss
-
-		return loss_function
+		def bootstrapping_hard(y_true, y_pred, beta=0.80):
+			"""
+			https://github.com/killthekitten/kaggle-carvana-2017/blob/master/losses.py
+			"""
+			if self.beta is not None:
+				beta = self.beta
+			y_pred /= K.sum(y_pred, axis=-1, keepdims=True)
+			y_pred = K.clip(y_pred, K.epsilon(), 1.0 - K.epsilon())
+			hard_label = K.tf.cast(y_pred>0.5, K.tf.float32)
+			hard_loss = -K.sum((beta * y_true + (1. - beta) * hard_label) *K.log(y_pred), axis=-1)
+			return hard_loss
+		if self.bootstrapping_type == "hard":
+			return bootstrapping_hard
+		elif self.bootstrapping_type == "soft":
+			return bootstrapping_soft
+		else:
+			assert bootstrapping_type in ["soft", "hard"]
+		return 
 
 	def accuracy(self, y_true, y_pred):
-		if self.pretrain:
-			y_true_item = y_true
-		else:
-			y_true_item = y_true[:, :-1]
-		return categorical_accuracy(y_true_item, y_pred)
+		return categorical_accuracy(y_true, y_pred)
 
 	def on_epoch_end(self, epoch, logs):
-		if self.update_epoch_loss:
-			# alpha(t)の更新
-			if epoch < 10:
-				self.alpha_t = 0.0
-				self.beta_t = 0.0
-			elif epoch >= 70:
-				self.alpha_t = 3
-				self.beta_t = 0.0
-			else:
-				self.alpha_t = (epoch - 10.0) / (70.0 - 10.0) * 3
-				self.beta_t = (epoch - 10.0) / (70.0 - 10.0) * 0.0
+		pass
 
 	def on_train_end(self, logs):
 		""""""
@@ -135,16 +113,17 @@ class BootstrappingCallback(Callback):
 class BootstrappingNeuralNetworkClassifier(object):
 	"""
 	"""
-	def __init__(self, clf, bootstrapping_callback, batch_size=128, pretrain_epoch=40, finetune_epoch=40):
+	def __init__(self, clf, batch_size=128, epochs=40, bootstrapping_type="hard", beta=0.95, patience=0, best_model_name="model_check_point_best_model"):
 		"""
 		:param clf:
 		"""
 		self.model = clf
-		self.finetune_model = keras.models.clone_model(clf)
-		self.bootstrapping_callback = bootstrapping_callback
 		self.batch_size = batch_size
-		self.pretrain_epoch = pretrain_epoch
-		self.finetune_epoch = finetune_epoch
+		self.epochs = epochs
+		self.bootstrapping_type = bootstrapping_type
+		self.bootstrapping_callback = BootstrappingCallback(batch_size=batch_size, beta=beta, bootstrapping_type=bootstrapping_type)
+		self.patience = patience
+		self.best_model_name = best_model_name
 
 	def onehot(self, narr, nclass=None):
 		"""
@@ -155,51 +134,34 @@ class BootstrappingNeuralNetworkClassifier(object):
 			nclass = np.max(narr) + 1
 		return np.eye(nclass)[narr]
 
-	def fit(self, X, y):
+	def fit(self, X, y, validation_data=None,):
 		"""
 		:param X: numpy.ndarray, train datasets, 2-ndim
 		:param y: numpy.ndarray, label of train datasets, scalar values, 1-ndim. 
 					If label == -1, the sample is unlabel.
 		"""
-		unlabeledX = X[y == -1, :]  # .tolist()
-		labeledX = X[y != -1, :]  # .tolist()
-		labeled_y = y[y != -1]
-		if labeled_y.ndim == 1:
-			labeled_y = self.onehot(labeled_y)
+		if y.ndim == 1:
+			y = self.onehot(y)
 
 		# step 1. train nn clf with labeled datasets.
 		self.model.compile(loss=self.bootstrapping_callback.make_loss(), optimizer='adam', 
 		metrics=[self.bootstrapping_callback.accuracy])
-		clf = self.fit_model(labeledX, labeled_y, epochs=self.pretrain_epoch)
-
-		# step 2. predict unlabeled dataset
-		if len(unlabeledX) == 0:
-			pass
+		if validation_data is not None:
+			self.fit_model(X, y, epochs=self.epochs, X_valid=validation_data[0], Y_valid=validation_data[1], patience=self.patience)
 		else:
-			print("\nfinetune model with bootstrapping loss.\n")
-			hard_label = self.predict(unlabeledX)
-			hard_label = self.onehot(hard_label, np.max(y) + 1)
-			# step 3. train clf with unlabeled datasets and labeled datasets.
-			# add flag whether is pseudo-labeled sample
-			labeled_y = np.hstack((labeled_y, np.zeros((len(labeled_y), 1))))
-			hard_label = np.hstack((hard_label, -1 * np.ones((len(hard_label), 1))))
-			# merge dataset
-			merge_X_train = np.vstack((labeledX, unlabeledX))
-			merge_y_train = np.vstack((labeled_y, hard_label))
-			self.bootstrapping_callback.update_epoch_loss = True
-			self.bootstrapping_callback.pretrain = False
-			self.finetune_model.compile(loss=self.bootstrapping_callback.make_loss(), optimizer='adam',
-										metrics=[self.bootstrapping_callback.accuracy])
-			self.model = self.finetune_model
-			clf = self.fit_model(merge_X_train, merge_y_train, epochs=self.finetune_epoch)
-			self.clf = clf
+			self.fit_model(X, y, epochs=self.epochs)
 
-	def fit_model(self, X_train, Y_train, X_test=None, Y_test=None, epochs=None):
-		if X_test is not None:
+	def fit_model(self, X_train, Y_train, X_valid=None, Y_valid=None, epochs=None, patience=0):
+		if X_valid is not None:
+			early_stopping = EarlyStopping(
+				monitor='val_loss', 
+				patience=patience, 
+			)
+			model_check_point_save = ModelCheckpoint('.{}.hdf5'.format(self.best_model_name), save_best_only=True, monitor='val_loss', mode='min')
 			hist = self.model.fit_generator(self.bootstrapping_callback.train_generator(X_train, Y_train),
 											steps_per_epoch=X_train.shape[0] // self.batch_size,
-											validation_data=(X_test, Y_test), callbacks=[self.bootstrapping_callback],
-											validation_steps=X_test.shape[0] // self.batch_size, epochs=epochs).history
+											validation_data=(X_valid, Y_valid), callbacks=[self.bootstrapping_callback, early_stopping, model_check_point_save],
+											validation_steps=X_valid.shape[0] // self.batch_size, epochs=epochs).history
 		else:
 			hist = self.model.fit_generator(self.bootstrapping_callback.train_generator(X_train, Y_train),
 											steps_per_epoch=X_train.shape[0] // self.batch_size,
@@ -224,7 +186,6 @@ class BootstrappingNeuralNetworkClassifier(object):
 		pred = self.model.predict(X, batch_size=self.batch_size, verbose=1)
 		pred = np.argmax(pred, axis=1)
 		return pred
-
 
 
 
