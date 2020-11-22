@@ -39,13 +39,12 @@ install_requires = [
 	'pandas',
 	'sklearn',
 	'keras',
-	'tensorflow'
 ]
 
 	
 setup(
 	name='weaklysupervised',
-	version='0.0.2',
+	version='0.0.3',
 	description='Python implementation of weakly supervised learning algorithm framework',
 	long_description=long_description,
 	#long_description_content_type="text/markdown",
@@ -60,5 +59,8 @@ setup(
 	platforms=platforms,
 	classifiers=classifiers,
 	install_requires=install_requires,
+	extras_require = {
+		'keras_backend': ['tensorflow'],
+	}, 
 	keywords=['weakly-supervised learning','ssl', 'deep learning', 'machine learning', 'weak supervision']
 	)   

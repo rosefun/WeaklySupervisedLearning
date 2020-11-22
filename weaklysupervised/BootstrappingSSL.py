@@ -147,7 +147,10 @@ class BootstrappingNeuralNetworkClassifier(object):
 		self.model.compile(loss=self.bootstrapping_callback.make_loss(), optimizer='adam', 
 		metrics=[self.bootstrapping_callback.accuracy])
 		if validation_data is not None:
-			self.fit_model(X, y, epochs=self.epochs, X_valid=validation_data[0], Y_valid=validation_data[1], patience=self.patience)
+			Y_valid = validation_data[1]
+			if Y_valid.ndim == 1:
+				Y_valid = self.onehot(Y_valid)
+			self.fit_model(X, y, epochs=self.epochs, X_valid=validation_data[0], Y_valid=Y_valid, patience=self.patience)
 		else:
 			self.fit_model(X, y, epochs=self.epochs)
 
