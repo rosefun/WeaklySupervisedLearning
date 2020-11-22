@@ -12,8 +12,6 @@ import setuptools
 def read(fname):
 	return codecs.open(os.path.join(os.path.dirname(__file__), fname)).read()
 
-#long_des = read("README.rst")
-
 with open("README.rst", "r") as fh:
 	long_description = fh.read()
 
@@ -41,13 +39,14 @@ install_requires = [
 	'pandas',
 	'sklearn',
 	'keras',
+	'tensorflow'
 ]
 
 	
 setup(
 	name='weaklysupervised',
-	version='0.0.1',
-	description='Python implementation of weakly-supervised learning algorithm',
+	version='0.0.2',
+	description='Python implementation of weakly supervised learning algorithm framework',
 	long_description=long_description,
 	#long_description_content_type="text/markdown",
 	#py_modules=['pyssl'],

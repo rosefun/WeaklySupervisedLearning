@@ -1,44 +1,9 @@
-# Weakly Supervised Learning
+# -*- coding: utf-8 -*-
+"""
+Created on Sun Dec 22 19:22:43 2020
 
-
-
-# Description
-
-
-
-This is a Python framework for weakly supervised learning.  This package can be used for weak supervised learning classification tasks.
-
-
-
-# Installation
-
-
-
-You can install it by `pip` method.
-
-
-
-``````python
-pip install weaklysupervised
-``````
-
-
-
-# API
-
-We have implemented following weakly-supervised learning algorithm. 
-
-
-
-- bootstrapping 
-
-
-
-# Examples
-
-
-
-```python
+@author: rosefun
+"""
 from examples_utils import get_data, DNN
 from sklearn import metrics
 from weaklysupervised import BootstrappingNeuralNetworkClassifier
@@ -53,15 +18,6 @@ if __name__ == "__main__":
 	predict = model.predict(X_test)
 	acc = metrics.accuracy_score(y_test, predict)
 	print("bootstrapping accuracy", acc)
-```
-
-
-
-Please see `examples`  folder for more examples.
-
-
-
-
 
 
 
